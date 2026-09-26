@@ -1,0 +1,21 @@
+resources:
+  pipelines:
+    lab5_pipeline:
+      name: lena066636-lab5-declarative-pipeline
+      catalog: dbr_dev_ua5816bd
+      target: lena066636_silver
+      libraries:
+        - file:
+            path: ../pipelines/01_bronze_streaming.py
+        - file:
+            path: ../pipelines/02_bronze_landing.py
+        - file:
+            path: ../pipelines/03_silver_expectations.py
+        - file:
+            path: ../pipelines/04_customers_scd2.py
+      configuration:
+        eventhub_namespace: evhua5816bd
+        eventhub_name: crypto-ticks
+        secret_scope: team-crypto-scope
+        landing_path: /Volumes/dbr_dev_ua5816bd/lena066636_bronze/landing/customers/
+      development: true

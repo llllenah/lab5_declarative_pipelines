@@ -1,0 +1,20 @@
+resources:
+  jobs:
+    lab5_maintenance_job:
+      name: lena066636-lab5-pipeline-with-maintenance
+      tasks:
+        - task_key: run_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.lab5_pipeline.id}
+
+        - task_key: table_maintenance
+          depends_on:
+            - task_key: run_pipeline
+          notebook_task:
+            notebook_path: ../notebooks/05_table_maintenance.py
+            base_parameters:
+              catalog: dbr_dev_ua5816bd
+              silver_schema: lena066636_silver
+
+      # single run for the lab demo — no schedule block here, same as
+      # Lukasz's earlier "run once, don't schedule recurring" guidance
