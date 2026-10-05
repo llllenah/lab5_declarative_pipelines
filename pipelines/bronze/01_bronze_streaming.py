@@ -1,6 +1,4 @@
-# Bronze: declarative pipeline table from a streaming source (Event Hub, Kafka protocol)
-# Reuses the same Event Hub ticks stream from the crypto-demo project, but ingested here
-# as a personal Lakeflow pipeline table instead of a hand-rolled Structured Streaming job.
+# Bronze pipeline: streaming source (Event Hub via its Kafka-compatible endpoint).
 
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
@@ -11,10 +9,10 @@ SECRET_SCOPE = spark.conf.get("secret_scope", "team-crypto-scope")
 
 
 @dp.table(
-    name="bronze_ticks_stream",
-    comment="Raw ticks ingested from Event Hub via the Kafka-compatible endpoint.",
+    name="ticks_stream",
+    comment="Raw crypto ticks ingested from Event Hub via the Kafka-compatible endpoint.",
 )
-def bronze_ticks_stream():
+def ticks_stream():
     connection_str = dbutils.secrets.get(scope=SECRET_SCOPE, key="eventhub-connection-string")
     jaas_config = (
         "kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule required "
@@ -29,7 +27,7 @@ def bronze_ticks_stream():
         "startingOffsets": "earliest",
     }
     return (
-        dp.read_stream("kafka", options=kafka_options)
+        spark.readStream.format("kafka").options(**kafka_options).load()
         .withColumn("value", F.col("value").cast("string"))
         .withColumn("source", F.lit("eventhub"))
         .withColumn("ingestion_timestamp", F.current_timestamp())

@@ -2,78 +2,102 @@
 
 ## Overview
 
-This project implements a Lakeflow Spark Declarative Pipeline (the successor to Delta Live
-Tables) covering ingestion from both a streaming and a batch source, silver-layer data quality
-enforcement, and an SCD Type 2 dimension, deployed through a Databricks Asset Bundle.
+This project implements Lakeflow Spark Declarative Pipelines (the successor to Delta Live
+Tables) for a dataset of cities. It covers ingestion from a streaming source and from a JSON
+landing volume, silver-layer data quality enforcement, an SCD Type 2 dimension, and deployment
+with a Databricks Asset Bundle.
 
-Catalog: `dbr_dev_ua5816bd`. Target schema: `lena066636_silver`. Bronze schema: `lena066636_bronze`.
+Catalog: `dbr_dev_ua5816bd`. Bronze schema: `lena066636_bronze`. Silver schema: `lena066636_silver`.
 
 ## Architecture
 
 ```
-Auto Loader (JSON, /Volumes/.../lena066636_bronze/...)  ─▶ bronze_customers_landing ─▶ silver_customers_landing ─▶ customers_scd2
-Kafka (Event Hub, crypto-ticks)                         ─▶ bronze_ticks_stream
+Auto Loader (JSON, landing volume) ─▶ bronze.cities_landing ─▶ silver.cities_clean ─▶ silver.cities_scd2
+Kafka (Event Hub, crypto-ticks)    ─▶ bronze.ticks_stream
 ```
 
-Two independent sources feed the pipeline. The streaming ticks table (`bronze_ticks_stream`)
-demonstrates ingestion from a streaming source on its own. The CSV/JSON landing path
-(`bronze_customers_landing`) flows through silver-layer cleaning and quality checks into a
-Type 2 slowly changing dimension (`customers_scd2`).
+A pipeline publishes its tables to a single schema. The bronze and silver layers live in
+different schemas, so they are implemented as two pipelines orchestrated by one job:
+
+```
+Job: lena066636-lab5-bronze-silver-maintenance
+  bronze_pipeline  ─▶  silver_pipeline  ─▶  table_maintenance
+```
+
+## Data model
+
+The main entity is a city. Each record has `city_id`, `city`, `population` and
+`effective_date`. The SCD Type 2 table `cities_scd2` keeps the history of changes of a city's
+name or population, with `__START_AT` and `__END_AT` columns added by `apply_changes`
+(`__END_AT` is null for the current version).
 
 ## Components
 
-**`pipelines/01_bronze_streaming.py`** — bronze table sourced from Event Hub over its
-Kafka-compatible endpoint, reusing the same connection pattern as the crypto-demo project.
+**`pipelines/bronze/01_bronze_streaming.py`**: table `ticks_stream`, sourced from Event Hub
+over its Kafka-compatible endpoint.
 
-**`pipelines/02_bronze_landing.py`** — bronze table from a JSON landing volume, ingested via
-Auto Loader. The landing path lives inside the bronze schema's own volume rather than a
-separate landing schema.
+**`pipelines/bronze/02_bronze_landing.py`**: table `cities_landing`, ingested from JSON files
+in the landing volume with Auto Loader. Raw data only, no casting at this layer.
 
-**`pipelines/03_silver_expectations.py`** — cleans and deduplicates the landing records, with
-three declared data-quality expectations: a non-null customer ID and city (enforced by dropping
-violating rows), and a sanity check on population (flagged, not dropped).
+**`pipelines/silver/03_silver_cities.py`**: table `cities_clean`. Reads the bronze table,
+applies types and trimming, and declares three data-quality expectations: non-null `city_id`
+and `city` (violating rows are dropped) and a positive `population` (violations are reported).
 
-**`pipelines/04_customers_scd2.py`** — a Type 2 slowly changing dimension built with
-`apply_changes`, tracking both `city` and `population` so that a real attribute change is
-visible across SCD2 versions.
+**`pipelines/silver/04_cities_scd2.py`**: table `cities_scd2`, built with `apply_changes`.
+A new version is created when the city name or population changes. `effective_date` is the
+sequence column and is excluded from change tracking, so a repeated record with unchanged
+values does not create a new version.
 
-**`notebooks/05_table_maintenance.py`** — runs `OPTIMIZE` and `VACUUM` on the silver tables,
-executed as a separate job task after the pipeline completes.
+**`notebooks/03_table_maintenance.py`**: `OPTIMIZE` and `VACUUM` on the bronze and silver
+tables, run as the last task of the job.
 
-**`resources/` + `databricks.yml`** — Databricks Asset Bundle definitions for the pipeline and
-for a job that chains a pipeline run with the maintenance step.
+**`notebooks/01_generate_sample_data.py`** and **`notebooks/02_verify_scd2.py`**: dev/test
+notebooks, not part of the job. The first writes a sample batch of city records into the
+landing volume, the second shows the SCD2 history. The same batches are available as plain
+files in `sample_data/`.
+
+**`resources/` and `databricks.yml`**: Asset Bundle definitions for both pipelines and the job.
+All parameters (catalog, schemas, paths, Event Hub settings) are passed as configuration, with
+no values hardcoded in the pipeline code.
+
+## SCD Type 2 verification
+
+SCD2 behavior is verified with two input files. The first batch (`cities_batch_1.json`) loads
+four cities. The second batch (`cities_batch_2.json`), loaded after the first run, contains:
+
+| City | Change in batch 2 | Expected result in `cities_scd2` |
+|---|---|---|
+| Kyiv | population changed | previous version closed (`__END_AT` set), new current version added |
+| Odesa | no change | still one version |
+| Dnipro | new city | one new current version |
+| Lviv, Kharkiv | not in batch 2 | unchanged, one version each |
+
+![SCD2 table after the second batch](screenshots/scd2_table.png)
 
 ## Results
 
-The pipeline (`lena066636-lab5-declarative-pipeline`) completed successfully:
+Bronze pipeline run:
 
-| Table | Type | Output records | Expectations |
-|---|---|---|---|
-| `bronze_customers_landing` | Streaming table | 2 | — |
-| `bronze_ticks_stream` | Streaming table | 126 | — |
-| `silver_customers_landing` | Streaming table | 2 | 3/3 passed |
-| `customers_scd2` | Streaming table | 2 upserted | enforced upstream |
+![Bronze pipeline run](screenshots/pipeline_run_bronze.png)
 
-![Pipeline run graph](screenshots/pipeline_run.png)
+Silver pipeline run, with the data-quality expectations:
 
-The wrapping job (`lena066636-lab5-pipeline-with-maintenance`) succeeded end to end in 1m 40s:
-`run_pipeline` (42s) → `table_maintenance` (57s), on serverless compute.
+![Silver pipeline run](screenshots/pipeline_run_silver.png)
 
-![Job run graph](screenshots/job_run.png)
+Job run with all three tasks:
 
-Lineage for `customers_scd2`, checked in Catalog Explorer, correctly shows
-`silver_customers_landing` as its upstream source, including the SCD2 tracking columns
-(`__START_AT` / `__END_AT`) that `apply_changes` adds automatically.
+![Job run](screenshots/job_run.png)
 
-![Lineage graph for customers_scd2](screenshots/lineage.png)
+Lineage of `cities_scd2`, checked in Catalog Explorer:
 
-Reload behavior was verified by attempting a full refresh on `customers_scd2`: it is blocked by
-the framework's `pipelines.reset.allowed` protection on streaming tables, which prevents an
-accidental full-refresh data loss. A normal incremental run (Start) processes correctly instead —
-see `lineage_and_reload_notes.md` for details.
+![Lineage of cities_scd2](screenshots/lineage.png)
+
+Reload behavior: a full refresh of `cities_scd2` is blocked by the framework's
+`pipelines.reset.allowed` protection on streaming tables, which prevents accidental loss of
+history. A normal incremental run processes new files correctly. See
+`lineage_and_reload_notes.md`.
 
 ## Declarative vs classic comparison
 
-A full write-up comparing this approach against the classic Spark jobs from Labs 3-4
-(orchestration, data quality, idempotency, lineage, maintenance, flexibility, cost) is in
-`comparison_declarative_vs_classic.md`.
+A comparison with the classic Spark jobs from Labs 3-4 (orchestration, data quality,
+idempotency, lineage, maintenance, flexibility, cost) is in `comparison_declarative_vs_classic.md`.
