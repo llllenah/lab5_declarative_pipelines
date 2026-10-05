@@ -94,10 +94,13 @@ Lineage of `cities_scd2`, checked in Catalog Explorer:
 
 Reload behavior: a full refresh of `cities_scd2` is blocked by the framework's
 `pipelines.reset.allowed` protection on streaming tables, which prevents accidental loss of
-history. A normal incremental run processes new files correctly. See
-`lineage_and_reload_notes.md`.
+history. A normal incremental run processes new files correctly. If a full rebuild is really
+needed, the table should be dropped explicitly and recreated by the pipeline.
 
 ## Declarative vs classic comparison
 
-A comparison with the classic Spark jobs from Labs 3-4 (orchestration, data quality,
-idempotency, lineage, maintenance, flexibility, cost) is in `comparison_declarative_vs_classic.md`.
+Compared with the classic Spark jobs from Labs 3-4, the declarative pipeline builds the
+execution order and lineage from table dependencies automatically. Data-quality checks are
+declared as expectations and reported in the pipeline UI. SCD2 is handled by `apply_changes`
+instead of a hand-written MERGE. Table maintenance (OPTIMIZE, VACUUM) still runs as a separate
+job task. The trade-off is less direct control over custom per-row logic.
