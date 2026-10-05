@@ -1,7 +1,3 @@
-# Databricks notebook source
-# DEV/TEST notebook (not part of the job): writes a sample batch of city records
-# into the landing volume. Run with batch=1 first, and with batch=2 later to test SCD2.
-
 import json
 
 dbutils.widgets.text("landing_path", "/Volumes/dbr_dev_ua5816bd/lena066636_bronze/landing/cities/")
